@@ -127,6 +127,7 @@ type Platform struct {
 	threadIsolation            bool
 	// noReplyToTrigger: when true, send via Create instead of Im.Message.Reply (no quote to the user's message).
 	noReplyToTrigger bool
+	replyInThread    bool // when true, bot replies create threads even for non-thread messages
 	resolveMentions  bool
 	client           *lark.Client
 	replayClient     *lark.Client
@@ -192,6 +193,7 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 	respondToAtEveryoneAndHere, _ := opts["respond_to_at_everyone_and_here"].(bool)
 	shareSessionInChannel, _ := opts["share_session_in_channel"].(bool)
 	threadIsolation, _ := opts["thread_isolation"].(bool)
+	replyInThread, _ := opts["reply_in_thread"].(bool)
 	resolveMentionsOpt, _ := opts["resolve_mentions"].(bool)
 	noReplyToTrigger := false
 	if v, ok := opts["reply_to_trigger"].(bool); ok && !v {
@@ -243,6 +245,7 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 		respondToAtEveryoneAndHere: respondToAtEveryoneAndHere,
 		shareSessionInChannel:      shareSessionInChannel,
 		threadIsolation:            threadIsolation,
+		replyInThread:              replyInThread,
 		resolveMentions:            resolveMentionsOpt,
 		noReplyToTrigger:           noReplyToTrigger,
 		client:                     lark.NewClient(appID, appSecret, clientOpts...),
@@ -2311,10 +2314,10 @@ func (p *Platform) shouldReplyInThread(rc replyContext) bool {
 	if rc.messageID == "" {
 		return false
 	}
-	// inThread tracks whether the message originates from a real thread.
-	// Also require a thread session key to avoid enabling ReplyInThread
-	// for P2P chats where thread_isolation has no effect on session keys.
-	return p.threadIsolation && rc.inThread && isThreadSessionKey(rc.sessionKey)
+	if rc.inThread {
+		return true // message is in a thread → always reply in thread
+	}
+	return p.replyInThread // not in a thread → reply_in_thread config decides
 }
 
 // shouldUseThreadOrReplyAPI is true when we should call Im.Message.Reply (optionally with ReplyInThread).
