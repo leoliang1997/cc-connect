@@ -755,6 +755,18 @@ func TestBuildReplyMessageReqBody_SetsReplyInThreadFlag(t *testing.T) {
 			replyCtx:      replyContext{messageID: "om_reply"},
 			wantThreading: false,
 		},
+		{
+			name:          "reply_in_thread config creates thread for non-thread message",
+			platform:      &Platform{replyInThread: true},
+			replyCtx:      replyContext{messageID: "om_reply", sessionKey: "feishu:oc_chat:root:om_reply"},
+			wantThreading: true,
+		},
+		{
+			name:          "reply_in_thread config does not affect already-threaded message",
+			platform:      &Platform{replyInThread: false},
+			replyCtx:      replyContext{messageID: "om_reply", sessionKey: "feishu:oc_chat:root:om_root", inThread: true},
+			wantThreading: true,
+		},
 	}
 
 	for _, tt := range tests {
