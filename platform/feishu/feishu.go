@@ -1068,7 +1068,9 @@ func (p *Platform) getChatMembers(ctx context.Context, chatID string) map[string
 // (before JSON serialization). Reverse-matches against the chat member list,
 // longest name first. Uses the correct at syntax based on predicted message type.
 func (p *Platform) resolveMentionsInContent(ctx context.Context, chatID, content string) string {
+	slog.Info(p.tag()+": resolveMentionsInContent", "chatID", chatID, "content", content)
 	if !p.resolveMentions || chatID == "" || !strings.Contains(content, "@") {
+		slog.Info(p.tag()+": resolveMentionsInContent: no resolve needed", "chatID", chatID, "content", content)
 		return content
 	}
 	members := p.getChatMembers(ctx, chatID)
@@ -1097,6 +1099,34 @@ func (p *Platform) resolveMentionsInContent(ctx context.Context, chatID, content
 			atTag = fmt.Sprintf(`<at user_id="%s">%s</at>`, openID, name)
 		}
 		slog.Info(p.tag()+": mention resolved", "name", name, "open_id", openID, "card_format", useCardFormat)
+		result = strings.ReplaceAll(result, pattern, atTag)
+	}
+	slog.Info(p.tag()+": resolveMentionsInContent: result", "result", result)
+	return result
+}
+
+// resolveMentionsForCard replaces @name with card-format at tags (<at id=openID></at>).
+// Used by UpdateMessage and SendPreviewStart which always produce card output.
+func (p *Platform) resolveMentionsForCard(ctx context.Context, chatID, content string) string {
+	members := p.getChatMembers(ctx, chatID)
+	if len(members) == 0 {
+		return content
+	}
+	names := make([]string, 0, len(members))
+	for name := range members {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool { return len(names[i]) > len(names[j]) })
+
+	result := content
+	for _, name := range names {
+		pattern := "@" + name
+		if !strings.Contains(result, pattern) {
+			continue
+		}
+		openID := members[name]
+		atTag := fmt.Sprintf(`<at id=%s></at>`, openID)
+		slog.Info(p.tag()+": mention resolved (card)", "name", name, "open_id", openID)
 		result = strings.ReplaceAll(result, pattern, atTag)
 	}
 	return result
@@ -1675,7 +1705,8 @@ func (p *Platform) Reply(ctx context.Context, rctx any, content string) error {
 
 	content = p.resolveMentionsInContent(ctx, rc.chatID, content)
 	msgType, msgBody := buildReplyContent(content)
-
+	slog.Info(p.tag()+": Reply", "msgType", msgType, "msgBody", msgBody)
+	fmt.Println("Reply:msgType", msgType, "msgBody", msgBody)
 	if !p.shouldUseThreadOrReplyAPI(rc) {
 		return p.sendNewMessageToChat(ctx, rc, msgType, msgBody)
 	}
@@ -1697,6 +1728,9 @@ func (p *Platform) Send(ctx context.Context, rctx any, content string) error {
 
 	content = p.resolveMentionsInContent(ctx, rc.chatID, content)
 	msgType, msgBody := buildReplyContent(content)
+	slog.Info(p.tag()+": Send", "msgType", msgType, "msgBody", msgBody)
+	fmt.Println("Send:msgType", msgType, "msgBody", msgBody)
+	fmt.Println("Send:content", content)
 	return p.sendNewMessageToChat(ctx, rc, msgType, msgBody)
 }
 
@@ -1896,6 +1930,7 @@ func predictMsgType(content string) string {
 
 func buildReplyContent(content string) (msgType string, body string) {
 	if !containsMarkdown(content) {
+		fmt.Println("buildReplyContent:msgTypeText", content)
 		b, _ := json.Marshal(map[string]string{"text": content})
 		return larkim.MsgTypeText, string(b)
 	}
@@ -1904,8 +1939,10 @@ func buildReplyContent(content string) (msgType string, body string) {
 	// strikethrough, etc.). Only fall back to post md tag when the content
 	// exceeds the card table limit (Feishu API error 11310: max 5 tables).
 	if countMarkdownTables(content) > maxCardTables {
+		fmt.Println("buildReplyContent:msgTypePost", content)
 		return larkim.MsgTypePost, buildPostMdJSON(content)
 	}
+	fmt.Println("buildReplyContent:msgTypeInteractive", content)
 	return larkim.MsgTypeInteractive, buildCardJSON(sanitizeMarkdownURLs(preprocessFeishuMarkdown(content)))
 }
 
@@ -3027,6 +3064,12 @@ func (p *Platform) SendPreviewStart(ctx context.Context, rctx any, content strin
 		return nil, fmt.Errorf("%s: chatID is empty", p.tag())
 	}
 
+	// Resolve @mentions before building card
+	if p.resolveMentions && chatID != "" && strings.Contains(content, "@") {
+		slog.Debug(p.tag()+": SendPreviewStart resolving mentions", "chat_id", chatID)
+		content = p.resolveMentionsForCard(ctx, chatID, content)
+	}
+
 	cardJSON := buildPreviewCardJSON(content)
 
 	var msgID string
@@ -3109,6 +3152,12 @@ func (p *Platform) UpdateMessage(ctx context.Context, previewHandle any, content
 	h, ok := previewHandle.(*feishuPreviewHandle)
 	if !ok {
 		return fmt.Errorf("%s: invalid preview handle type %T", p.tag(), previewHandle)
+	}
+
+	// Resolve @mentions before building card (card uses <at id=openID></at> syntax)
+	if p.resolveMentions && h.chatID != "" && strings.Contains(content, "@") {
+		slog.Debug(p.tag()+": UpdateMessage resolving mentions", "chat_id", h.chatID, "content_len", len(content))
+		content = p.resolveMentionsForCard(ctx, h.chatID, content)
 	}
 
 	cardJSON := ""
