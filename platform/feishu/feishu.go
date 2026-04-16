@@ -1094,6 +1094,33 @@ func (p *Platform) resolveMentionsInContent(ctx context.Context, chatID, content
 	return result
 }
 
+// resolveMentionsForCard replaces @name with card-format at tags (<at id=openID></at>).
+// Used by UpdateMessage and SendPreviewStart which always produce card output.
+func (p *Platform) resolveMentionsForCard(ctx context.Context, chatID, content string) string {
+	members := p.getChatMembers(ctx, chatID)
+	if len(members) == 0 {
+		return content
+	}
+	names := make([]string, 0, len(members))
+	for name := range members {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool { return len(names[i]) > len(names[j]) })
+
+	result := content
+	for _, name := range names {
+		pattern := "@" + name
+		if !strings.Contains(result, pattern) {
+			continue
+		}
+		openID := members[name]
+		atTag := fmt.Sprintf(`<at id=%s></at>`, openID)
+		slog.Info(p.tag()+": mention resolved (card)", "name", name, "open_id", openID)
+		result = strings.ReplaceAll(result, pattern, atTag)
+	}
+	return result
+}
+
 // chainMessage holds extracted data from one message in a reply chain.
 type chainMessage struct {
 	senderName string
@@ -3040,6 +3067,11 @@ func (p *Platform) SendPreviewStart(ctx context.Context, rctx any, content strin
 		return nil, fmt.Errorf("%s: chatID is empty", p.tag())
 	}
 
+	// Resolve @mentions before building card
+	if p.resolveMentions && chatID != "" && strings.Contains(content, "@") {
+		content = p.resolveMentionsForCard(ctx, chatID, content)
+	}
+
 	cardJSON := buildPreviewCardJSON(content)
 
 	var msgID string
@@ -3114,6 +3146,11 @@ func (p *Platform) UpdateMessage(ctx context.Context, previewHandle any, content
 	h, ok := previewHandle.(*feishuPreviewHandle)
 	if !ok {
 		return fmt.Errorf("%s: invalid preview handle type %T", p.tag(), previewHandle)
+	}
+
+	// Resolve @mentions before building card
+	if p.resolveMentions && h.chatID != "" && strings.Contains(content, "@") {
+		content = p.resolveMentionsForCard(ctx, h.chatID, content)
 	}
 
 	cardJSON := ""
