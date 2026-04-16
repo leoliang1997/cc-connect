@@ -2542,12 +2542,21 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 		switch event.Type {
 		case EventThinking:
-			// In quiet mode, still freeze the preview so text segments
-			// before and after thinking don't merge into a single card.
-			if !e.display.ThinkingMessages && sp.canPreview() && len(textParts) > segmentStart {
+			// In quiet mode, still split text segments so they don't merge.
+			if !e.display.ThinkingMessages && len(textParts) > segmentStart {
+				if sp.canPreview() {
+					sp.freeze()
+					sp.detachPreview()
+				} else {
+					// Preview degraded — send accumulated text directly
+					segment := strings.Join(textParts[segmentStart:], "")
+					if segment != "" {
+						for _, chunk := range splitMessage(segment, maxPlatformMessageLen) {
+							sendWorkspace(p, replyCtx, chunk)
+						}
+					}
+				}
 				segmentStart = len(textParts)
-				sp.freeze()
-				sp.detachPreview()
 			}
 			if e.display.ThinkingMessages && event.Content != "" {
 				// Flush accumulated text segment before thinking display
@@ -2576,12 +2585,19 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 		case EventToolUse:
 			toolCount++
-			// When tool messages are hidden, freeze the preview so text segments
-			// before and after tool use don't merge into a single card.
+			// When tool messages are hidden, split text segments.
 			if !e.display.ToolMessages && len(textParts) > segmentStart {
 				if sp.canPreview() {
 					sp.freeze()
 					sp.detachPreview()
+				} else {
+					// Preview degraded — send accumulated text directly
+					segment := strings.Join(textParts[segmentStart:], "")
+					if segment != "" {
+						for _, chunk := range splitMessage(segment, maxPlatformMessageLen) {
+							sendWorkspace(p, replyCtx, chunk)
+						}
+					}
 				}
 				segmentStart = len(textParts)
 			}
