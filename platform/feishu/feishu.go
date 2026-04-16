@@ -1028,40 +1028,48 @@ func (p *Platform) fetchChatMembers(ctx context.Context, chatID string) (map[str
 	if p.client == nil {
 		return nil, fmt.Errorf("%s: client not initialized", p.tag())
 	}
-	members := make(map[string]string)
-	req := larkim.NewGetChatMembersReqBuilder().
-		ChatId(chatID).
-		MemberIdType("open_id").
-		PageSize(100).
-		Build()
 	timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	token, err := p.fetchFreshTenantAccessToken(timeoutCtx)
-	if err != nil {
-		return nil, fmt.Errorf("%s: fetch tenant token for chat members: %w", p.tag(), err)
-	}
-	iter, err := p.client.Im.ChatMembers.GetByIterator(timeoutCtx, req, larkcore.WithTenantAccessToken(token))
-	if err != nil {
-		return nil, fmt.Errorf("%s: list chat members: %w", p.tag(), err)
-	}
+
+	members := make(map[string]string)
+	pageToken := ""
 	for {
-		hasMore, member, err := iter.Next()
+		reqBuilder := larkim.NewGetChatMembersReqBuilder().
+			ChatId(chatID).
+			MemberIdType("open_id").
+			PageSize(100)
+		if pageToken != "" {
+			reqBuilder.PageToken(pageToken)
+		}
+		resp, err := p.client.Im.ChatMembers.Get(timeoutCtx, reqBuilder.Build())
 		if err != nil {
-			slog.Debug(p.tag()+": fetch chat members page error", "chat_id", chatID, "error", err)
+			return nil, fmt.Errorf("%s: list chat members: %w", p.tag(), err)
+		}
+		if !resp.Success() {
+			return nil, fmt.Errorf("%s: list chat members code=%d msg=%s", p.tag(), resp.Code, resp.Msg)
+		}
+		if resp.Data == nil {
 			break
 		}
-		if member != nil && member.Name != nil && member.MemberId != nil {
-			name := *member.Name
-			if _, exists := members[name]; !exists {
-				members[name] = *member.MemberId
-			} else {
-				members[name] = ""
+		for _, member := range resp.Data.Items {
+			if member.Name != nil && member.MemberId != nil {
+				name := *member.Name
+				if _, exists := members[name]; !exists {
+					members[name] = *member.MemberId
+				} else {
+					members[name] = ""
+				}
 			}
 		}
-		if !hasMore {
+		if resp.Data.HasMore == nil || !*resp.Data.HasMore {
 			break
 		}
+		if resp.Data.PageToken == nil || *resp.Data.PageToken == "" {
+			break
+		}
+		pageToken = *resp.Data.PageToken
 	}
+	slog.Info(p.tag()+": fetched chat members", "chat_id", chatID, "count", len(members))
 	return members, nil
 }
 
