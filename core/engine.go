@@ -2542,6 +2542,13 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 		switch event.Type {
 		case EventThinking:
+			// In quiet mode, still freeze the preview so text segments
+			// before and after thinking don't merge into a single card.
+			if !e.display.ThinkingMessages && sp.canPreview() && len(textParts) > segmentStart {
+				segmentStart = len(textParts)
+				sp.freeze()
+				sp.detachPreview()
+			}
 			if e.display.ThinkingMessages && event.Content != "" {
 				// Flush accumulated text segment before thinking display
 				previewActive := sp.canPreview()
@@ -2569,13 +2576,14 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 		case EventToolUse:
 			toolCount++
-			// When tool messages are hidden, insert a visual break between text
-			// segments so the accumulated response doesn't run together.
+			// When tool messages are hidden, freeze the preview so text segments
+			// before and after tool use don't merge into a single card.
 			if !e.display.ToolMessages && len(textParts) > segmentStart {
-				textParts = append(textParts, "\n\n")
 				if sp.canPreview() {
-					sp.appendText("\n\n")
+					sp.freeze()
+					sp.detachPreview()
 				}
+				segmentStart = len(textParts)
 			}
 			if e.display.ToolMessages {
 				// Flush accumulated text segment before tool display
